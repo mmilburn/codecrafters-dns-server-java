@@ -38,6 +38,38 @@ class DNSHeader {
         flags = (short) (flags | 0x8000);
     }
 
+    public int getOpcode() {
+        return (flags >> 11) & 0b1111;
+    }
+
+    public void setOpcode(int opcode) {
+        if (opcode < 0 || opcode > 15) {
+            throw new IllegalArgumentException("OPCODE must be a 4-bit value (0 to 15).");
+        }
+        flags &= ~(0b1111 << 11);
+        flags |= (short) (opcode << 11);
+    }
+
+    public int getRD() {
+        return (flags >> 8) & 1;
+    }
+
+    public void setRD(int rd) {
+        if (rd < 0 || rd > 1) {
+            throw new IllegalArgumentException("RD must be a 1-bit value.");
+        }
+        flags &= ~0x0100;
+        flags |= (short) (rd << 8);
+    }
+
+    public void setRCode(int code) {
+        if (code < 0 || code > 15) {
+            throw new IllegalArgumentException("RCODE must be a 4-bit value (0 to 15).");
+        }
+        flags &= ~0xF;
+        flags |= (short) code;
+    }
+
     public short getQdCount() {
         return qdCount;
     }
@@ -345,6 +377,11 @@ public class Main {
                 final DatagramPacket packetResponse = new DatagramPacket(bufResponse, bufResponse.length, packet.getSocketAddress());
                 DNSHeader txHeader = new DNSHeader();
                 txHeader.setId(rxMsg.getHeader().getId());
+                txHeader.setOpcode(rxMsg.getHeader().getOpcode());
+                txHeader.setRD(rxMsg.getHeader().getRD());
+                if (rxMsg.getHeader().getOpcode() != 0) {
+                    txHeader.setRCode(4);
+                }
                 txHeader.setResponse();
                 txHeader.setQdCount((short) 1);
                 txHeader.setAnCount((short) 1);
