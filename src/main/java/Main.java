@@ -1,9 +1,14 @@
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.StringJoiner;
 import java.util.stream.Collectors;
 
 class DNSHeader {
@@ -102,15 +107,8 @@ class DNSHeader {
         return baos.toByteArray();
     }
 
-    public static DNSHeader fromBytes(byte[] data) {
-        ByteArrayInputStream bais = new ByteArrayInputStream(data);
-        DataInputStream dis = new DataInputStream(bais);
-        try {
-            return new DNSHeader(dis.readShort(), dis.readShort(), dis.readShort(), dis.readShort(), dis.readShort(), dis.readShort());
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return new DNSHeader((short) 0, (short) 0, (short) 0, (short) 0, (short) 0, (short) 0);
+    public static DNSHeader fromByteBuffer(ByteBuffer data) {
+        return new DNSHeader(data.getShort(), data.getShort(), data.getShort(), data.getShort(), data.getShort(), data.getShort());
     }
 }
 
@@ -132,26 +130,33 @@ record DNSName(String name) {
         return baos.toByteArray();
     }
 
-    public static DNSName fromBytes(byte[] data) {
-        ByteArrayInputStream bais = new ByteArrayInputStream(data);
-        DataInputStream dis = new DataInputStream(bais);
-        StringBuilder name = new StringBuilder();
-        try {
-            int len = dis.readUnsignedByte();
-            while (len > 0) {
-                if (name.length() > 0) {
-                    name.append(".");
-                }
+    public static DNSName fromByteBuffer(ByteBuffer data) {
+        byte len;
+        boolean isCompressed = false;
+        StringJoiner labels = new StringJoiner(".");
+        int pos = 0;
+
+        while ((len = data.get()) != 0) {
+            if ((len & 0xC0) == 0xC0) {
+                //Compression applies to the rest of label list in this record.
+                isCompressed = true;
+                //Mask off the 2 high bits of the pointer to get the remaining 6, concatenate that with the next
+                //byte (lower bits) to get our offset.
+                int offset = ((len & 0x3F) << 8) | (data.get() & 0xFF);
+                pos = data.position();
+                data.position(offset);
+            } else {
                 byte[] label = new byte[len];
-                dis.readFully(label);
-                name.append(new String(label));
-                len = dis.readUnsignedByte();
+                data.get(label);
+                labels.add(new String(label));
             }
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
+            if (isCompressed) {
+                data.position(pos);
+            }
         }
-        return new DNSName(name.toString());
+        return new DNSName(labels.toString());
     }
+
 }
 
 class RData {
@@ -184,31 +189,7 @@ class RData {
     }
 }
 
-class DNSQuestion {
-    private DNSName name;
-    private short type;
-    private short clazz;
-
-    public DNSQuestion() {
-    }
-
-    public DNSQuestion(DNSName name, short type, short clazz) {
-        this.name = name;
-        this.type = type;
-        this.clazz = clazz;
-    }
-
-    public DNSName getName() {
-        return name;
-    }
-
-    public short getType() {
-        return type;
-    }
-
-    public short getClazz() {
-        return clazz;
-    }
+record DNSQuestion(DNSName name, short type, short clazz) {
 
     public byte[] toBytes() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -223,45 +204,25 @@ class DNSQuestion {
         return baos.toByteArray();
     }
 
-    public static DNSQuestion fromBytes(byte[] data) {
-        int end = 0;
-        for (byte octet : data) {
-            if (octet == 0) {
-                end++;
-                break;
-            }
-            end++;
-        }
-        byte[] nameBytes = new byte[end];
-        ByteArrayInputStream bais = new ByteArrayInputStream(data);
-        DataInputStream dis = new DataInputStream(bais);
-        try {
-            dis.readFully(nameBytes);
-            return new DNSQuestion(DNSName.fromBytes(nameBytes), dis.readShort(), dis.readShort());
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return new DNSQuestion();
+    public static DNSQuestion fromByteBuffer(ByteBuffer data) {
+        return new DNSQuestion(DNSName.fromByteBuffer(data), data.getShort(), data.getShort());
     }
 }
 
 class DNSAnswer {
-    private DNSName name;
-    private short type;
-    private short clazz;
-    private int ttl;
-    private short rdlength;
-    private RData rdata;
+    private final DNSName name;
+    private final short type;
+    private final short clazz;
+    private final int ttl;
+    private final short rdLength;
+    private final RData rdata;
 
-    public DNSAnswer() {
-    }
-
-    public DNSAnswer(DNSName name, short type, short clazz, int ttl, short rdlength, RData rdata) {
+    public DNSAnswer(DNSName name, short type, short clazz, int ttl, short rdLength, RData rdata) {
         this.name = name;
         this.type = type;
         this.clazz = clazz;
         this.ttl = ttl;
-        this.rdlength = rdlength;
+        this.rdLength = rdLength;
         this.rdata = rdata;
     }
 
@@ -282,67 +243,55 @@ class DNSAnswer {
         return baos.toByteArray();
     }
 
-    public static DNSAnswer fromBytes(byte[] data) {
-        int end = 0;
-        for (byte octet : data) {
-            if (octet == 0) {
-                //end++;
-                break;
-            }
-            end++;
-        }
-        byte[] nameBytes = new byte[end];
-        ByteArrayInputStream bais = new ByteArrayInputStream(data);
-        try (DataInputStream dis = new DataInputStream(bais)) {
-            dis.readFully(nameBytes);
-            DNSName name = DNSName.fromBytes(nameBytes);
-            short type = dis.readShort();
-            short clazz = dis.readShort();
-            Integer ttl = dis.readInt();
-            short rdLength = dis.readShort();
-            byte[] rdBytes = new byte[rdLength];
-            dis.readFully(rdBytes);
-            return new DNSAnswer(name, type, clazz, ttl, rdLength, RData.fromBytes(rdBytes));
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return new DNSAnswer();
+    public static DNSAnswer fromByteBuffer(ByteBuffer data) {
+        DNSName name = DNSName.fromByteBuffer(data);
+        short type = data.getShort();
+        short clazz = data.getShort();
+        int ttl = data.getInt();
+        short rdLength = data.getShort();
+        byte[] rdBytes = new byte[rdLength];
+        data.get(rdBytes);
+        return new DNSAnswer(name, type, clazz, ttl, rdLength, RData.fromBytes(rdBytes));
     }
 }
 
 class DNSMessage {
 
-    private DNSHeader header;
-    private DNSQuestion question;
-    private DNSAnswer answer;
+    private final DNSHeader header;
+    private final List<DNSQuestion> questions;
+    private List<DNSAnswer> answers;
 
-    public DNSMessage(DNSHeader header, DNSQuestion question, DNSAnswer answer) {
+    public DNSMessage(DNSHeader header, List<DNSQuestion> questions, List<DNSAnswer> answers) {
         this.header = header;
-        this.question = question;
-        this.answer = answer;
+        this.questions = questions;
+        this.answers = answers;
     }
 
-    public DNSMessage(DNSHeader header, DNSQuestion question) {
+    public DNSMessage(DNSHeader header, List<DNSQuestion> questions) {
         this.header = header;
-        this.question = question;
+        this.questions = questions;
     }
 
     public DNSHeader getHeader() {
         return header;
     }
 
-    public DNSQuestion getQuestion() {
-        return question;
+    public List<DNSQuestion> getQuestions() {
+        return questions;
     }
 
     public byte[] toBytes() {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (DataOutputStream dos = new DataOutputStream(baos)) {
-            dos.write(this.header.toBytes());
-            dos.write(this.question.toBytes());
-            if (this.answer != null) {
-                dos.write(this.answer.toBytes());
+            dos.write(header.toBytes());
+            for (DNSQuestion question : questions) {
+                dos.write(question.toBytes());
+            }
+            if (!answers.isEmpty()) {
+                for (DNSAnswer answer : answers) {
+                    dos.write(answer.toBytes());
+                }
             }
             dos.flush();
         } catch (IOException ioNo) {
@@ -351,14 +300,20 @@ class DNSMessage {
         return baos.toByteArray();
     }
 
-    public static DNSMessage fromBytes(byte[] data) {
-        DNSHeader header = DNSHeader.fromBytes(Arrays.copyOfRange(data, 0, 12));
-        DNSQuestion question = DNSQuestion.fromBytes(Arrays.copyOfRange(data, 12, 512));
-        if (header.getAnCount() > 0) {
-            DNSAnswer answer = DNSAnswer.fromBytes(Arrays.copyOfRange(data, 12 + question.toBytes().length, 512));
-            return new DNSMessage(header, question, answer);
+    public static DNSMessage fromByteBuffer(ByteBuffer data) {
+        DNSHeader header = DNSHeader.fromByteBuffer(data);
+        List<DNSQuestion> questions = new ArrayList<>();
+        for (int i = 0; i < header.getQdCount(); i++) {
+            questions.add(DNSQuestion.fromByteBuffer(data));
         }
-        return new DNSMessage(header, question);
+        if (header.getAnCount() > 0) {
+            List<DNSAnswer> answers = new ArrayList<>();
+            for (int i = 0; i < header.getAnCount(); i++) {
+                answers.add(DNSAnswer.fromByteBuffer(data));
+            }
+            return new DNSMessage(header, questions, answers);
+        }
+        return new DNSMessage(header, questions);
     }
 }
 
@@ -372,23 +327,17 @@ public class Main {
                 final DatagramPacket packet = new DatagramPacket(buf, buf.length);
                 serverSocket.receive(packet);
                 //System.out.println("Received data");
-                DNSMessage rxMsg = DNSMessage.fromBytes(packet.getData());
+                ByteBuffer bb = ByteBuffer.wrap(packet.getData());
+                DNSMessage rxMsg = DNSMessage.fromByteBuffer(bb);
                 final byte[] bufResponse = new byte[512];
                 final DatagramPacket packetResponse = new DatagramPacket(bufResponse, bufResponse.length, packet.getSocketAddress());
-                DNSHeader txHeader = new DNSHeader();
-                txHeader.setId(rxMsg.getHeader().getId());
-                txHeader.setOpcode(rxMsg.getHeader().getOpcode());
-                txHeader.setRD(rxMsg.getHeader().getRD());
-                if (rxMsg.getHeader().getOpcode() != 0) {
-                    txHeader.setRCode(4);
-                }
-                txHeader.setResponse();
-                txHeader.setQdCount((short) 1);
-                txHeader.setAnCount((short) 1);
+                DNSHeader txHeader = getDnsHeader(rxMsg);
                 byte[] ip = new RData("8.8.8.8").toBytes();
-                DNSQuestion question = new DNSQuestion(new DNSName(rxMsg.getQuestion().getName().name()), rxMsg.getQuestion().getType(), rxMsg.getQuestion().getClazz());
-                DNSAnswer answer = new DNSAnswer(new DNSName(rxMsg.getQuestion().getName().name()), rxMsg.getQuestion().getType(), rxMsg.getQuestion().getClazz(), 1800, (short) ip.length, RData.fromBytes(ip));
-                DNSMessage txMsg = new DNSMessage(txHeader, question, answer);
+                List<DNSAnswer> answers = new ArrayList<>();
+                for (DNSQuestion question : rxMsg.getQuestions()) {
+                    answers.add(new DNSAnswer(new DNSName(question.name().name()), question.type(), question.clazz(), 1800, (short) ip.length, RData.fromBytes(ip)));
+                }
+                DNSMessage txMsg = new DNSMessage(txHeader, rxMsg.getQuestions(), answers);
                 packetResponse.setData(txMsg.toBytes());
                 //System.err.println(Arrays.toString(packetResponse.getData()));
                 serverSocket.send(packetResponse);
@@ -396,5 +345,19 @@ public class Main {
         } catch (IOException e) {
             System.out.println("IOException: " + e.getMessage());
         }
+    }
+
+    private static DNSHeader getDnsHeader(DNSMessage rxMsg) {
+        DNSHeader txHeader = new DNSHeader();
+        txHeader.setId(rxMsg.getHeader().getId());
+        txHeader.setOpcode(rxMsg.getHeader().getOpcode());
+        txHeader.setRD(rxMsg.getHeader().getRD());
+        if (rxMsg.getHeader().getOpcode() != 0) {
+            txHeader.setRCode(4);
+        }
+        txHeader.setResponse();
+        txHeader.setQdCount(rxMsg.getHeader().getQdCount());
+        txHeader.setAnCount(rxMsg.getHeader().getQdCount());
+        return txHeader;
     }
 }
