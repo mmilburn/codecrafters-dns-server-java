@@ -1,14 +1,13 @@
+import com.beust.jcommander.JCommander;
+import com.beust.jcommander.Parameter;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
+import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.StringJoiner;
+import java.util.*;
 import java.util.stream.Collectors;
 
 class DNSHeader {
@@ -148,11 +147,12 @@ record DNSName(String name) {
             } else {
                 byte[] label = new byte[len];
                 data.get(label);
-                labels.add(new String(label));
+                labels.add(new String(label, StandardCharsets.UTF_8));
             }
-            if (isCompressed) {
-                data.position(pos);
-            }
+        }
+        //whoops! restore the pointer *outside* of the while loop.
+        if (isCompressed) {
+            data.position(pos);
         }
         return new DNSName(labels.toString());
     }
@@ -170,7 +170,7 @@ class RData {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (DataOutputStream dos = new DataOutputStream(baos)) {
             for (String octet : data.split("\\.")) {
-                dos.writeByte(Byte.parseByte(octet));
+                dos.writeByte(Integer.parseInt(octet));
             }
             dos.flush();
         } catch (IOException ioNo) {
@@ -263,12 +263,15 @@ class DNSMessage {
 
     public DNSMessage(DNSHeader header, List<DNSQuestion> questions, List<DNSAnswer> answers) {
         this.header = header;
+        this.header.setQdCount((short) questions.size());
+        this.header.setAnCount((short) answers.size());
         this.questions = questions;
         this.answers = answers;
     }
 
     public DNSMessage(DNSHeader header, List<DNSQuestion> questions) {
         this.header = header;
+        this.header.setQdCount((short) questions.size());
         this.questions = questions;
     }
 
@@ -280,6 +283,10 @@ class DNSMessage {
         return questions;
     }
 
+    public List<DNSAnswer> getAnswers() {
+        return answers;
+    }
+
     public byte[] toBytes() {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -288,7 +295,7 @@ class DNSMessage {
             for (DNSQuestion question : questions) {
                 dos.write(question.toBytes());
             }
-            if (!answers.isEmpty()) {
+            if (answers != null && !answers.isEmpty()) {
                 for (DNSAnswer answer : answers) {
                     dos.write(answer.toBytes());
                 }
@@ -306,36 +313,87 @@ class DNSMessage {
         for (int i = 0; i < header.getQdCount(); i++) {
             questions.add(DNSQuestion.fromByteBuffer(data));
         }
-        if (header.getAnCount() > 0) {
-            List<DNSAnswer> answers = new ArrayList<>();
-            for (int i = 0; i < header.getAnCount(); i++) {
-                answers.add(DNSAnswer.fromByteBuffer(data));
-            }
-            return new DNSMessage(header, questions, answers);
+        List<DNSAnswer> answers = new ArrayList<>();
+        for (int i = 0; i < header.getAnCount(); i++) {
+            answers.add(DNSAnswer.fromByteBuffer(data));
         }
-        return new DNSMessage(header, questions);
+        return new DNSMessage(header, questions, answers);
+    }
+}
+
+class CommandLineArgs {
+
+    @Parameter(names = "--resolver", description = "Resolver to forward queries to")
+    private String resolver;
+
+    public String getResolver() {
+        return resolver;
     }
 }
 
 public class Main {
     public static void main(String[] args) {
+        CommandLineArgs commandLineArgs = new CommandLineArgs();
+        JCommander.newBuilder()
+                .addObject(commandLineArgs)
+                .build()
+                .parse(args);
+
+        InetAddress resolverAddress = null;
+        int resolverPort = 0;
+        if (!commandLineArgs.getResolver().isEmpty()) {
+            String[] resolverParts = commandLineArgs.getResolver().split(":");
+            resolverPort = Integer.parseInt(resolverParts[1]);
+            try {
+                resolverAddress = InetAddress.getByName(resolverParts[0]);
+            } catch (UnknownHostException badHost) {
+                System.err.println(Arrays.toString(badHost.getStackTrace()));
+            }
+        }
 
         try (DatagramSocket serverSocket = new DatagramSocket(2053)) {
+            Random random = new Random();
             //noinspection InfiniteLoopStatement
             while (true) {
                 final byte[] buf = new byte[512];
                 final DatagramPacket packet = new DatagramPacket(buf, buf.length);
                 serverSocket.receive(packet);
-                //System.out.println("Received data");
                 ByteBuffer bb = ByteBuffer.wrap(packet.getData());
                 DNSMessage rxMsg = DNSMessage.fromByteBuffer(bb);
+                List<DNSAnswer> answers = new ArrayList<>();
+
+                if (!commandLineArgs.getResolver().isEmpty()) {
+                    DNSHeader forwardHeader = DNSHeader.fromByteBuffer(ByteBuffer.wrap(rxMsg.getHeader().toBytes()));
+
+                    for (DNSQuestion question : rxMsg.getQuestions()) {
+
+                        DNSMessage forward = new DNSMessage(forwardHeader, Collections.singletonList(question));
+                        forward.getHeader().setId((short) (random.nextInt(Short.MAX_VALUE - Short.MIN_VALUE + 1) + Short.MIN_VALUE));
+                        //System.err.println("Question: " + forward.getQuestions().get(0).name() + " id: " + forward.getHeader().getId());
+                        final byte[] forwardQuery = forward.toBytes();
+                        byte[] forwardResponse = new byte[512];
+                        DatagramPacket forwardPacket = new DatagramPacket(forwardQuery, forwardQuery.length, new InetSocketAddress(resolverAddress, resolverPort));
+                        DatagramPacket forwardResponsePacket = new DatagramPacket(forwardResponse, forwardResponse.length);
+                        serverSocket.send(forwardPacket);
+                        serverSocket.receive(forwardResponsePacket);
+                        DNSMessage resolverMsg = DNSMessage.fromByteBuffer(ByteBuffer.wrap(forwardResponsePacket.getData()));
+                        if (resolverMsg.getHeader().getAnCount() == 1) {
+                            answers.add(resolverMsg.getAnswers().get(0));
+                        } else {
+                            System.err.println("Got " + resolverMsg.getHeader().getAnCount() + " answers from resolver " + forwardPacket.getAddress() + ":" + forwardPacket.getPort());
+                        }
+                    }
+                }
+
                 final byte[] bufResponse = new byte[512];
                 final DatagramPacket packetResponse = new DatagramPacket(bufResponse, bufResponse.length, packet.getSocketAddress());
                 DNSHeader txHeader = getDnsHeader(rxMsg);
-                byte[] ip = new RData("8.8.8.8").toBytes();
-                List<DNSAnswer> answers = new ArrayList<>();
-                for (DNSQuestion question : rxMsg.getQuestions()) {
-                    answers.add(new DNSAnswer(new DNSName(question.name().name()), question.type(), question.clazz(), 1800, (short) ip.length, RData.fromBytes(ip)));
+                //If answers is populated, we forwarded questions on to another resolver.
+                if (answers.isEmpty()) {
+                    byte[] ip = new RData("8.8.8.8").toBytes();
+                    for (DNSQuestion question : rxMsg.getQuestions()) {
+                        answers.add(new DNSAnswer(new DNSName(question.name().name()), question.type(), question.clazz(), 1800, (short) ip.length, RData.fromBytes(ip)));
+                    }
                 }
                 DNSMessage txMsg = new DNSMessage(txHeader, rxMsg.getQuestions(), answers);
                 packetResponse.setData(txMsg.toBytes());
