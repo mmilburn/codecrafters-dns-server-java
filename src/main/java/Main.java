@@ -10,16 +10,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
-class DNSHeader {
+class DNSHeader implements Cloneable {
     private short id;
     private short flags;
     private short qdCount;
     private short anCount;
-    private short nsCount;
-    private short arCount;
-
-    public DNSHeader() {
-    }
+    private final short nsCount;
+    private final short arCount;
 
     public DNSHeader(short id, short flags, short qdCount, short anCount, short nsCount, short arCount) {
         this.id = id;
@@ -28,10 +25,6 @@ class DNSHeader {
         this.anCount = anCount;
         this.nsCount = nsCount;
         this.arCount = arCount;
-    }
-
-    public short getId() {
-        return id;
     }
 
     public void setId(short id) {
@@ -44,26 +37,6 @@ class DNSHeader {
 
     public int getOpcode() {
         return (flags >> 11) & 0b1111;
-    }
-
-    public void setOpcode(int opcode) {
-        if (opcode < 0 || opcode > 15) {
-            throw new IllegalArgumentException("OPCODE must be a 4-bit value (0 to 15).");
-        }
-        flags &= ~(0b1111 << 11);
-        flags |= (short) (opcode << 11);
-    }
-
-    public int getRD() {
-        return (flags >> 8) & 1;
-    }
-
-    public void setRD(int rd) {
-        if (rd < 0 || rd > 1) {
-            throw new IllegalArgumentException("RD must be a 1-bit value.");
-        }
-        flags &= ~0x0100;
-        flags |= (short) (rd << 8);
     }
 
     public void setRCode(int code) {
@@ -108,6 +81,15 @@ class DNSHeader {
 
     public static DNSHeader fromByteBuffer(ByteBuffer data) {
         return new DNSHeader(data.getShort(), data.getShort(), data.getShort(), data.getShort(), data.getShort(), data.getShort());
+    }
+
+    @Override
+    public DNSHeader clone() {
+        try {
+            return (DNSHeader) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError();
+        }
     }
 }
 
@@ -321,6 +303,126 @@ class DNSMessage {
     }
 }
 
+class DNSServer {
+    private static final int DEFAULT_PORT = 2053;
+    private final String resolver;
+    private final Random random = new Random();
+
+    public DNSServer(String resolver) {
+        this.resolver = resolver;
+    }
+
+    public void start() {
+        try (DatagramSocket serverSocket = new DatagramSocket(DEFAULT_PORT)) {
+            System.out.println("DNS Server started on port " + DEFAULT_PORT);
+            InetSocketAddress resolverSockAddr = null;
+
+            if (!resolver.isEmpty()) {
+                String[] resolverParts = resolver.split(":");
+                InetAddress resolverAddress = InetAddress.getByName(resolverParts[0]);
+                int resolverPort = Integer.parseInt(resolverParts[1]);
+                resolverSockAddr = new InetSocketAddress(resolverAddress, resolverPort);
+            }
+
+            //noinspection InfiniteLoopStatement
+            while (true) {
+                DatagramPacket requestPacket = receiveRequestPacket(serverSocket);
+                DNSMessage request = DNSMessage.fromByteBuffer(ByteBuffer.wrap(requestPacket.getData()));
+                DNSMessage response = handleRequest(request, resolverSockAddr);
+                sendResponse(serverSocket, response, requestPacket.getSocketAddress());
+            }
+        } catch (IOException e) {
+            System.err.println("Error in DNSServer: " + e.getMessage());
+        }
+    }
+
+    private DatagramPacket receiveRequestPacket(DatagramSocket serverSocket) throws IOException {
+        byte[] buffer = new byte[512];
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+        serverSocket.receive(packet);
+        return packet;
+    }
+
+    private DNSMessage handleRequest(DNSMessage request, InetSocketAddress resolverSockAddr) {
+        if (resolverSockAddr != null) {
+            List<DNSAnswer> answers = new ArrayList<>();
+
+            try {
+                answers = forwardToResolver(request, resolverSockAddr);
+            } catch (IOException e) {
+                System.err.println("Error forwarding to resolver: " + e.getMessage());
+            }
+
+            if (answers.isEmpty()) {
+                answers = generateDefaultResponse(request);
+            }
+            return new DNSMessage(getResponseHeader(request), request.getQuestions(), answers);
+        }
+
+        return new DNSMessage(getResponseHeader(request), request.getQuestions(), generateDefaultResponse(request));
+    }
+
+    private List<DNSAnswer> forwardToResolver(DNSMessage request, InetSocketAddress resolverSockAddr) throws IOException {
+        try (DatagramSocket forwardSocket = new DatagramSocket()) {
+            List<DNSAnswer> answers = new ArrayList<>();
+
+            for (DNSQuestion question : request.getQuestions()) {
+                DNSHeader forwardHeader = request.getHeader().clone();
+                forwardHeader.setId((short) random.nextInt(Short.MAX_VALUE));
+
+                DNSMessage forwardMessage = new DNSMessage(forwardHeader, Collections.singletonList(question));
+                byte[] queryData = forwardMessage.toBytes();
+
+                DatagramPacket queryPacket = new DatagramPacket(queryData, queryData.length, resolverSockAddr);
+                forwardSocket.send(queryPacket);
+
+                byte[] responseBuffer = new byte[512];
+                DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+                forwardSocket.receive(responsePacket);
+                DNSMessage responseMessage = DNSMessage.fromByteBuffer(ByteBuffer.wrap(responsePacket.getData()));
+
+                answers.addAll(responseMessage.getAnswers());
+            }
+
+            return answers;
+        }
+    }
+
+    private List<DNSAnswer> generateDefaultResponse(DNSMessage request) {
+        byte[] defaultIp = {8, 8, 8, 8};
+        RData rData = RData.fromBytes(defaultIp);
+        List<DNSAnswer> answers = new ArrayList<>();
+
+        for (DNSQuestion question : request.getQuestions()) {
+            DNSAnswer answer = new DNSAnswer(
+                    question.name(),
+                    question.type(),
+                    question.clazz(),
+                    1800,
+                    (short) defaultIp.length,
+                    rData
+            );
+            answers.add(answer);
+        }
+        return answers;
+    }
+
+    private DNSHeader getResponseHeader(DNSMessage request) {
+        DNSHeader responseHeader = request.getHeader().clone();
+        if (responseHeader.getOpcode() != 0) {
+            responseHeader.setRCode(4);
+        }
+        responseHeader.setResponse();
+        return responseHeader;
+    }
+
+    private void sendResponse(DatagramSocket serverSocket, DNSMessage response, SocketAddress requester) throws IOException {
+        byte[] responseData = response.toBytes();
+        DatagramPacket responsePacket = new DatagramPacket(responseData, responseData.length, requester);
+        serverSocket.send(responsePacket);
+    }
+}
+
 class CommandLineArgs {
 
     @Parameter(names = "--resolver", description = "Resolver to forward queries to")
@@ -339,83 +441,7 @@ public class Main {
                 .build()
                 .parse(args);
 
-        InetAddress resolverAddress = null;
-        int resolverPort = 0;
-        if (!commandLineArgs.getResolver().isEmpty()) {
-            String[] resolverParts = commandLineArgs.getResolver().split(":");
-            resolverPort = Integer.parseInt(resolverParts[1]);
-            try {
-                resolverAddress = InetAddress.getByName(resolverParts[0]);
-            } catch (UnknownHostException badHost) {
-                System.err.println(Arrays.toString(badHost.getStackTrace()));
-            }
-        }
-
-        try (DatagramSocket serverSocket = new DatagramSocket(2053)) {
-            Random random = new Random();
-            //noinspection InfiniteLoopStatement
-            while (true) {
-                final byte[] buf = new byte[512];
-                final DatagramPacket packet = new DatagramPacket(buf, buf.length);
-                serverSocket.receive(packet);
-                ByteBuffer bb = ByteBuffer.wrap(packet.getData());
-                DNSMessage rxMsg = DNSMessage.fromByteBuffer(bb);
-                List<DNSAnswer> answers = new ArrayList<>();
-
-                if (!commandLineArgs.getResolver().isEmpty()) {
-                    DNSHeader forwardHeader = DNSHeader.fromByteBuffer(ByteBuffer.wrap(rxMsg.getHeader().toBytes()));
-
-                    for (DNSQuestion question : rxMsg.getQuestions()) {
-
-                        DNSMessage forward = new DNSMessage(forwardHeader, Collections.singletonList(question));
-                        forward.getHeader().setId((short) (random.nextInt(Short.MAX_VALUE - Short.MIN_VALUE + 1) + Short.MIN_VALUE));
-                        //System.err.println("Question: " + forward.getQuestions().get(0).name() + " id: " + forward.getHeader().getId());
-                        final byte[] forwardQuery = forward.toBytes();
-                        byte[] forwardResponse = new byte[512];
-                        DatagramPacket forwardPacket = new DatagramPacket(forwardQuery, forwardQuery.length, new InetSocketAddress(resolverAddress, resolverPort));
-                        DatagramPacket forwardResponsePacket = new DatagramPacket(forwardResponse, forwardResponse.length);
-                        serverSocket.send(forwardPacket);
-                        serverSocket.receive(forwardResponsePacket);
-                        DNSMessage resolverMsg = DNSMessage.fromByteBuffer(ByteBuffer.wrap(forwardResponsePacket.getData()));
-                        if (resolverMsg.getHeader().getAnCount() == 1) {
-                            answers.add(resolverMsg.getAnswers().get(0));
-                        } else {
-                            System.err.println("Got " + resolverMsg.getHeader().getAnCount() + " answers from resolver " + forwardPacket.getAddress() + ":" + forwardPacket.getPort());
-                        }
-                    }
-                }
-
-                final byte[] bufResponse = new byte[512];
-                final DatagramPacket packetResponse = new DatagramPacket(bufResponse, bufResponse.length, packet.getSocketAddress());
-                DNSHeader txHeader = getDnsHeader(rxMsg);
-                //If answers is populated, we forwarded questions on to another resolver.
-                if (answers.isEmpty()) {
-                    byte[] ip = new RData("8.8.8.8").toBytes();
-                    for (DNSQuestion question : rxMsg.getQuestions()) {
-                        answers.add(new DNSAnswer(new DNSName(question.name().name()), question.type(), question.clazz(), 1800, (short) ip.length, RData.fromBytes(ip)));
-                    }
-                }
-                DNSMessage txMsg = new DNSMessage(txHeader, rxMsg.getQuestions(), answers);
-                packetResponse.setData(txMsg.toBytes());
-                //System.err.println(Arrays.toString(packetResponse.getData()));
-                serverSocket.send(packetResponse);
-            }
-        } catch (IOException e) {
-            System.out.println("IOException: " + e.getMessage());
-        }
-    }
-
-    private static DNSHeader getDnsHeader(DNSMessage rxMsg) {
-        DNSHeader txHeader = new DNSHeader();
-        txHeader.setId(rxMsg.getHeader().getId());
-        txHeader.setOpcode(rxMsg.getHeader().getOpcode());
-        txHeader.setRD(rxMsg.getHeader().getRD());
-        if (rxMsg.getHeader().getOpcode() != 0) {
-            txHeader.setRCode(4);
-        }
-        txHeader.setResponse();
-        txHeader.setQdCount(rxMsg.getHeader().getQdCount());
-        txHeader.setAnCount(rxMsg.getHeader().getQdCount());
-        return txHeader;
+        DNSServer server = new DNSServer(commandLineArgs.getResolver());
+        server.start();
     }
 }
