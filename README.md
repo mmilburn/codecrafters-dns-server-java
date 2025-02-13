@@ -1,36 +1,32 @@
-[![progress-banner](https://backend.codecrafters.io/progress/dns-server/22b68a0d-987f-4c3a-93d0-db36a2008b42)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# About the Project
 
-This is a starting point for Java solutions to the
+This is a finished Java implementation for the codecrafters
 ["Build Your Own DNS server" Challenge](https://app.codecrafters.io/courses/dns-server/overview).
+This code implements functionality for all stages (and extensions) of the
+challenge as of 2025-02-13.
 
-In this challenge, you'll build a DNS server that's capable of parsing and
-creating DNS packets, responding to DNS queries, handling various record types
-and doing recursive resolve. Along the way we'll learn about the DNS protocol,
-DNS packet format, root servers, authoritative servers, forwarding servers,
-various record types (A, AAAA, CNAME, etc) and more.
+## What can it do?
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+1. Respond to multiple questions with a hardcoded `A` record of `8.8.8.8`.
+2. Handle compressed label sequences in questions.
+3. Forward queries for `A` records to an upstream resolver specified with
+   `--resolver <address>` on the command line. That upstream resolver must:
+    * Always respond with an answer section for the queries.
+    * Generate a response that does not contain other sections like (authority
+      section and additional section)
+    * Only respond when there is only one question in the question section (this
+      DNS server handles splitting questions into multiple packets then merges
+      the answers into a single response packet).
 
-# Passing the first stage
+# TODO
 
-The entry point for your `your_program.sh` implementation is in
-`src/main/java/Main.java`. Study and uncomment the relevant code, and push your
-changes to pass the first stage:
+- [ ] Move classes into separate files
+- [ ] Restructure the project into a codebase that is simple to maintain and
+  extend (demonstrate how I approach _software engineering_ versus just slinging
+  code).
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
-```
+# Test Run Video
 
-Time to move on to the next stage!
+A short video of the code being run in the codecrafters test environment:
 
-# Stage 2 & beyond
-
-Note: This section is for stages 2 and beyond.
-
-1. Ensure you have `mvn` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `src/main/java/Main.java`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+https://github.com/user-attachments/assets/c0b337d0-bf1f-465c-acc0-f678b9ccc099
