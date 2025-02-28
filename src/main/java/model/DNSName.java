@@ -10,10 +10,12 @@ record DNSName(String name) {
 
     public byte[] toBytes() {
         return StreamUtils.toBytes(dos -> {
-            for (String label : name.split("\\.")) {
-                byte[] labelBytes = label.getBytes(StandardCharsets.UTF_8);
-                dos.writeByte(labelBytes.length);
-                dos.write(labelBytes);
+            if (!name.isEmpty()) {
+                for (String label : name.split("\\.")) {
+                    byte[] labelBytes = label.getBytes(StandardCharsets.UTF_8);
+                    dos.writeByte(labelBytes.length);
+                    dos.write(labelBytes);
+                }
             }
             dos.writeByte(0);
         });
