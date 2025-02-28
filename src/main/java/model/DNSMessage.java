@@ -1,11 +1,9 @@
 package model;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import util.StreamUtils;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 public class DNSMessage {
@@ -41,9 +39,7 @@ public class DNSMessage {
     }
 
     public byte[] toBytes() {
-
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (DataOutputStream dos = new DataOutputStream(baos)) {
+        return StreamUtils.toBytes(dos -> {
             dos.write(header.toBytes());
             for (DNSQuestion question : questions) {
                 dos.write(question.toBytes());
@@ -53,11 +49,7 @@ public class DNSMessage {
                     dos.write(answer.toBytes());
                 }
             }
-            dos.flush();
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return baos.toByteArray();
+        });
     }
 
     public static DNSMessage fromByteBuffer(ByteBuffer data) {

@@ -1,5 +1,7 @@
 package model;
 
+import util.StreamUtils;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -10,21 +12,16 @@ import java.util.stream.Collectors;
 public class RData {
     private final String data;
 
-    public RData(String data) {
+    private RData(String data) {
         this.data = data;
     }
 
     public byte[] toBytes() {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (DataOutputStream dos = new DataOutputStream(baos)) {
+        return StreamUtils.toBytes(dos -> {
             for (String octet : data.split("\\.")) {
                 dos.writeByte(Integer.parseInt(octet));
             }
-            dos.flush();
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return baos.toByteArray();
+        });
     }
 
     public static RData fromBytes(byte[] data) {

@@ -1,29 +1,22 @@
 package model;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import util.StreamUtils;
+
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.StringJoiner;
 
 record DNSName(String name) {
 
     public byte[] toBytes() {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (DataOutputStream dos = new DataOutputStream(baos)) {
+        return StreamUtils.toBytes(dos -> {
             for (String label : name.split("\\.")) {
                 byte[] labelBytes = label.getBytes(StandardCharsets.UTF_8);
                 dos.writeByte(labelBytes.length);
                 dos.write(labelBytes);
             }
             dos.writeByte(0);
-            dos.flush();
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return baos.toByteArray();
+        });
     }
 
     public static DNSName fromByteBuffer(ByteBuffer data) {

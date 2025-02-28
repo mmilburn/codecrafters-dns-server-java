@@ -1,10 +1,8 @@
 package model;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import util.StreamUtils;
+
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
 public class DNSHeader implements Cloneable {
     private short id;
@@ -14,7 +12,7 @@ public class DNSHeader implements Cloneable {
     private final short nsCount;
     private final short arCount;
 
-    public DNSHeader(short id, short flags, short qdCount, short anCount, short nsCount, short arCount) {
+    private DNSHeader(short id, short flags, short qdCount, short anCount, short nsCount, short arCount) {
         this.id = id;
         this.flags = flags;
         this.qdCount = qdCount;
@@ -60,19 +58,14 @@ public class DNSHeader implements Cloneable {
     }
 
     public byte[] toBytes() {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (DataOutputStream dos = new DataOutputStream(baos)) {
+        return StreamUtils.toBytes(dos -> {
             dos.writeShort(id);
             dos.writeShort(flags);
             dos.writeShort(qdCount);
             dos.writeShort(anCount);
             dos.writeShort(nsCount);
             dos.writeShort(arCount);
-            dos.flush();
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return baos.toByteArray();
+        });
     }
 
     public static DNSHeader fromByteBuffer(ByteBuffer data) {

@@ -1,10 +1,8 @@
 package model;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import util.StreamUtils;
+
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
 public class DNSAnswer {
     private final DNSName name;
@@ -24,8 +22,7 @@ public class DNSAnswer {
     }
 
     public byte[] toBytes() {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (DataOutputStream dos = new DataOutputStream(baos)) {
+        return StreamUtils.toBytes(dos -> {
             dos.write(this.name.toBytes());
             dos.writeShort(this.type);
             dos.writeShort(this.clazz);
@@ -33,11 +30,7 @@ public class DNSAnswer {
             byte[] temp = this.rdata.toBytes();
             dos.writeShort(temp.length);
             dos.write(temp);
-            dos.flush();
-        } catch (IOException ioNo) {
-            System.err.println(Arrays.toString(ioNo.getStackTrace()));
-        }
-        return baos.toByteArray();
+        });
     }
 
     public static DNSAnswer fromByteBuffer(ByteBuffer data) {
