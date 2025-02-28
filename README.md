@@ -18,13 +18,6 @@ challenge as of 2025-02-13.
       DNS server handles splitting questions into multiple packets then merges
       the answers into a single response packet).
 
-# TODO
-
-- [ ] Move classes into separate files
-- [ ] Restructure the project into a codebase that is simple to maintain and
-  extend (demonstrate how I approach _software engineering_ versus just slinging
-  code).
-
 # Test Run Video
 
 A short video of the code being run in the codecrafters test environment:
