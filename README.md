@@ -18,7 +18,13 @@ challenge as of 2025-02-13.
       DNS server handles splitting questions into multiple packets then merges
       the answers into a single response packet).
 
-# Test Run Video
+## Running Locally
+
+You will need Java 23 (or later) and maven installed to run this code. The program can then be run with:
+
+`./your_program.sh --resolver <optional-upstream-ressolver>`
+
+## Test Run Video
 
 A short video of the code being run in the codecrafters test environment:
 
